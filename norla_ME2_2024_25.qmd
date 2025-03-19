@@ -1,0 +1,1287 @@
+---
+title: "ME2 - 2024"
+format:
+  html:
+    toc: true
+    toc_float: true
+    embed-resources: true
+    self-contained-math: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r packs, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include=TRUE, warning = FALSE, message = FALSE, fig.width = 5)
+pacman::p_load(tidyverse, rio, knitr, RColorBrewer, leaflet, lme4, emmeans, multcomp)
+theme_set(theme_bw(base_family = 16)) 
+select <- dplyr::select
+filter <- dplyr::filter
+```
+
+## Hibridos
+
+```{r}
+hibs_m2 <- data.frame(
+  ASGROW = c("MANTARRAYA", "KODIAK", "ALCE", "SALAMANDRA", "ANTILOPE", "BERRENDO"),
+  DEKALB = c("DK2037", "DK4021", "DK4024", "DK4018", NA, NA),
+  PIONEER = c("P3011W", "P32208W", NA, NA, NA, NA),
+  Candidatos = c("MY8729", "VY8601", NA, NA, NA, NA)
+) |> 
+  pivot_longer(everything(), names_to = "brand", values_to = "commercial_name") |> 
+  drop_na(commercial_name)
+
+hibs_m2 |> count(brand, commercial_name)
+hibs_m2_set1 <- hibs_m2 |> filter(!commercial_name=="VY8601")
+hibs_m2_set2 <- hibs_m2 |> filter(!commercial_name=="MY8729")
+```
+
+## Traits
+
+```{r}
+traits_ME2 <- tibble(
+  trait=c(
+    "DINEP - PATHOGEN:Fusarium sp., TISTY:Ear",
+    # "DEFG - CDEFG:Rotten",
+    "DEFG - CDEFG:Stain-General", 
+    "DSR - PATHOGEN:Cercospora zeae-maydis, TISTY:Leaf", 
+    "DINP - PATHOGEN:Spiroplasma kunkelii, TISTY:Leaf",
+    "DINP - PATHOGEN:Fusarium sp., TISTY:Stalk"), 
+  hib_target=c("DK2037" , "KODIAK", "DK4024", NA, "ANTILOPE"))
+```
+
+## Import full
+
+```{r}
+readxl::excel_sheets("norla24/Norla 2 y 3.xlsx")
+
+m2_raw <- rio::import("norla24/Norla 2 y 3.xlsx", sheet="Current_historico") |>
+  janitor::clean_names()  |>  
+  filter(!is.na(secondary_questions))   |> 
+  filter(field_pipeline %in% "ME2 MID ALTITUDE") |> 
+  unite(year_loc, c(field_year, field_name), remove = F) |> 
+  unite("trait", c("obs_observation_ref_cd", "secondary_questions"), sep = " - ", remove = FALSE) |> 
+  left_join(hibs_m2)
+
+m2_raw %>% distinct(year_loc, lat=field_field_latitude, lng=field_field_longitude) -> m2_raw_geo 
+m2_raw |> count(commercial_name)
+
+m2_raw |> 
+  filter(commercial_name %in% hibs_m2$commercial_name) |> 
+  separate(secondary_questions, into = c("pathogen", "tisty"), 
+           sep=",", remove = FALSE) |>
+  filter(!str_detect(obs_observation_ref_cd, "DINC")) |> 
+  count(field_year, tisty, trait) |>
+  pivot_wider(names_from = field_year, values_from = n) |>
+  # filter(tisty == " TISTY:Ear") |> 
+  arrange(tisty) |>
+  data.frame() |> 
+  arrange(-X2024, -X2022) 
+```
+
+### filter ME2
+
+```{r}
+m2_full <- m2_raw |> 
+  separate(secondary_questions, into = c("pathogen", "tisty"), sep=",", remove = FALSE) |>
+  filter(!str_detect(obs_observation_ref_cd, "DINC")) |> 
+  # count(pathogen, tisty)
+  unite("trait", c("obs_observation_ref_cd", "secondary_questions"), sep = " - ") |> 
+  filter(commercial_name %in% hibs_m2$commercial_name) |> 
+  filter(trait %in% traits_ME2$trait) |> 
+  left_join(traits_ME2)
+
+m2_full |> count(brand, commercial_name)
+m2_full %>% count(trait) 
+
+```
+
+## DEFG - CDEFG:Rotten
+
+```{r}
+m2_raw %>% 
+  filter(commercial_name %in% hibs_m2$commercial_name) |> 
+  separate(secondary_questions, 
+           into = c("pathogen", "tisty"), sep=",", remove = FALSE) |>
+  filter(tisty == " TISTY:Ear")  |> 
+  filter(prom_obs_num_value < 101)  |> 
+  unite("trait", c("obs_observation_ref_cd", "secondary_questions"),
+  sep = " - ") |> 
+  filter(str_detect(trait,"Fusarium"))  |> 
+  filter(!str_detect(trait,"DINC")) |> 
+  filter(!year_loc  == "2024_EKBGS_ACAMBARO_MACO_FTN_S24") |> 
+  filter(!str_detect(year_loc, "SANTALUCIA")) |> 
+  group_by(field_year, year_loc, brand, commercial_name) |> 
+  summarise(prom_obs_num_value = max(prom_obs_num_value),.groups = "drop") |> 
+  mutate(prom_obs_num_value=prom_obs_num_value+1)-> rotten 
+
+rotten |> 
+  ggplot() + 
+  facet_wrap("trait") + 
+  aes(x=field_year, y=prom_obs_num_value) + 
+  geom_boxplot() +
+  geom_jitter()
+```
+
+
+
+```{r}
+rotten %>% count(commercial_name)
+
+rotten %>% 
+  # filter(commercial_name=="DK4021")%>%
+  ggplot() + 
+  aes(prom_obs_num_value)+
+  geom_histogram() + 
+  geom_rug()+
+  ggtitle(paste("Trait:", unique(rotten$trait)[1]))
+```
+
+### 2
+
+```{r}
+traits_ME2  
+
+# rotten %>% filter(year_loc  == "2024_EKBGS_COLONIAS_HEPE_FTN_S24") |>
+#   select(trait, prom_obs_num_value)
+
+rotten %>% 
+  group_by(year_loc) |>
+  filter(c('VY8601') %in% commercial_name) %>%
+  # group_by(year_loc) |>
+  mutate(ref = prom_obs_num_value[commercial_name=="KODIAK"]) %>%
+  # calcular within-field: n de hibs, FIELD_press (95°) y variabilidad
+  group_by(year_loc) %>%
+  reframe(ref=first(ref), 
+          n_hibs=n(), 
+          field_press = quantile(prom_obs_num_value,.95),
+          IQR = IQR(prom_obs_num_value)
+          )%>% 
+  mutate(keep = (n_hibs>1) & (field_press>5) & (IQR>.1)) %>%
+  ungroup-> press_rotten
+
+press_rotten %>% 
+  arrange(-field_press) |> knitr::kable()
+press_rotten %>% count(keep)
+```
+
+```{r}
+press_rotten %>% 
+  filter(keep==TRUE) %>% 
+  select(year_loc, ref) %>% 
+  left_join(rotten, by="year_loc") %>% 
+  group_by(year_loc) %>% 
+  mutate(CE = (1-(prom_obs_num_value/ref))*100) %>%   
+  ungroup -> clean_rotten_pre 
+    # OBS_numValue2=OBS_numValue+1, 
+    # ref2 = OBS_numValue2[commercialName=="DK7088VT3P"],
+    # SI = OBS_numValue2/ref2) %>%
+
+# retener hibridos presentes en al menos 5 fields
+clean_rotten_pre %>% 
+  count(commercial_name) %>%
+  filter(n>1) -> rotten_n
+
+clean_rotten <- clean_rotten_pre %>% 
+  filter(commercial_name %in% rotten_n$commercial_name)
+
+clean_rotten %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> rotten_set
+
+rotten_set %>% knitr::kable()
+```
+
+```{r}
+press_rotten %>% 
+  left_join(rotten) %>% 
+  drop_na(prom_obs_num_value) %>% 
+  ggplot() +
+  facet_grid(keep~., scales="free", space = "free") +
+  aes(x=prom_obs_num_value, y=fct_reorder(year_loc, prom_obs_num_value, mean), fill=keep, col=keep) +
+  geom_boxplot(alpha=.2) + 
+  geom_count() +
+  labs(x="OBS_numvalue", y="") +
+  ggtitle(paste("Trait:", unique(rotten$trait)[1]))+ 
+  theme(legend.position='bottom')
+```
+
+```{r}
+pal <- colorNumeric("viridis", domain=c(1,max(unique(press_rotten$field_press))))
+
+press_rotten %>% 
+  left_join(m2_raw_geo) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(
+    color = ~pal(field_press),
+    radius=3, 
+    popup = paste0( "FIELD:"
+                    , press_rotten$year_loc 
+                    , "<br>"
+                    , "Press:"
+                    , press_rotten$field_press
+    )) %>% 
+  addLegend(data = press_rotten,
+            position = "bottomright",
+            pal = pal, values = ~field_press,
+            title = "rotten Score",
+            opacity = 1)
+```
+
+```{r}
+clean_rotten %>%  
+  # distinct(commercialName) %>% arrange(commercialName) %>% data.frame
+  ggplot() + 
+  # facet_wrap("FIELD_plantingSeason")+
+  aes(y=commercial_name, x=prom_obs_num_value) + 
+  geom_point(alpha=.5, aes(col=year_loc))  + 
+  # geom_jitter(width=.1, alpha=.5, aes(col=year_loc))  + 
+  stat_summary() + 
+  labs(y="", 
+       title="Within field Control Efficacy %", 
+       subtitle = "CE = (1-(hyb_score/ref.susc_score))*100)") + 
+  guides(col="none")
+```
+
+### 3
+
+```{r}
+clean_rotten %>% 
+  group_by(commercial_name, year_loc) %>% 
+  summarise(prom_obs_num_value=mean(prom_obs_num_value)) %>% 
+  select(commercial_name, year_loc, prom_obs_num_value) %>% 
+  pivot_wider(names_from = "year_loc", values_from = "prom_obs_num_value") %>% 
+  mutate(Average_geno = mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-(commercial_name), names_to = "year_loc", values_to = "prom_obs_num_value") %>% 
+  pivot_wider(names_from = "commercial_name", values_from = "prom_obs_num_value") %>% 
+  rowwise() %>% 
+  mutate(Average_field= mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-year_loc, names_to = "commercial_name", 
+               values_to = "prom_obs_num_value") %>% 
+  mutate(commercial_name = fct_reorder(commercial_name, prom_obs_num_value, mean)) %>% 
+  mutate(commercial_name = fct_relevel(commercial_name, "Average_field", after = Inf)) %>% 
+  mutate(year_loc = fct_reorder(year_loc, prom_obs_num_value, mean)) %>% 
+  mutate(year_loc = fct_relevel(year_loc, "Average_geno", 
+                                after = Inf)) -> rotten_mos
+```
+
+```{r}
+rotten_mos %>% 
+  ggplot(aes(x = commercial_name, y = year_loc)) + 
+  geom_tile(colour="black", aes(fill = prom_obs_num_value)) +
+  scale_fill_viridis_c() +
+  geom_text(aes(label=round(prom_obs_num_value)), color="white", size=2, fontface="bold") +
+  theme(axis.text.y = element_text(size = 8)) +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5, size = 12)) +
+  labs(x="", y="", 
+       fill=paste(unique(rotten$trait)[1]), 
+       title = paste("Trait:", unique(rotten$trait)[1], " ME2 - Base MD"))  
+
+# last_plot() %>% ggsave(file="plots/m3_yc_mosaico_tarspot.tiff", scale = 1.2, w=6)
+```
+
+### 4
+
+```{r}
+clean_rotten|>
+  ggplot() + 
+  aes(commercial_name, CE) + 
+  geom_boxplot() + 
+  geom_jitter(width=.2)
+
+# clean_rotten$CE |> hist()
+
+m_rotten <- lmer(prom_obs_num_value ~ commercial_name + (1|year_loc), data=clean_rotten)
+performance::check_heteroscedasticity(m_rotten)
+performance::check_normality(m_rotten)
+
+rotten_res <- emmeans(m_rotten, ~commercial_name, type = "response") %>%
+  cld(decreasing = TRUE, Letters = letters)%>%
+  tibble() |> 
+  mutate(.group = str_squish(.group)) |> 
+  # left_join(hib_m2) %>% 
+  left_join(rotten_n) |> 
+  left_join(rotten_set|>select(-n))
+rotten_res
+```
+
+### 5
+
+```{r}
+rotten_res %>% 
+  # filter(commercial_name %in% hibs_m2_set1$commercial_name) |> 
+  ggplot()+ 
+  aes(
+    x=fct_reorder(commercial_name, emmean, mean),
+    y=emmean) +
+  geom_col(aes(fill=.group),width=.1) + 
+  # geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL))+
+  geom_text(aes(label=paste(round(emmean))), size=3, vjust=-1)+
+  # geom_text(aes(label=paste(round(mean_val)), y=-Inf), 
+  #           size=3, vjust=1)+
+  labs(y="%", 
+       x="", fill="Tukey (5%)", 
+       subtitle="ME2 - Base MD ", 
+       # caption="Cuanto mayor el valor en x, mejor performance\n datapoints) al lado del hibrido"
+       ) + 
+  # ggtitle(paste("Trait:", unique(rotten$trait)[1]))+
+  # geom_text(aes(label=paste0("n=", n," - mean=", round(mean_val)), y=-Inf), hjust=-.2, size=3) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        legend.position="bottom") + 
+  coord_flip() 
+  # expand_limits(y = -10)
+```
+
+## "DEFG - CDEFG:Stain-General"
+
+```{r}
+m2_full %>% 
+  # retener traits de interes e hibridos 
+  filter(str_detect(trait,"DEFG - CDEFG:Stain-General")) %>%
+  drop_na(prom_obs_num_value) |> 
+  group_by(field_year, year_loc, commercial_name, trait) |> 
+  summarise(prom_obs_num_value = max(prom_obs_num_value),.groups = "drop") |> 
+  mutate(censoring = 1, value_rounded=ceiling(prom_obs_num_value)) -> stain
+
+stain %>% 
+  # filter(commercial_name=="DK4021")%>%
+  ggplot() + 
+  aes(prom_obs_num_value)+
+  geom_histogram() + 
+  ggtitle(paste("Trait:", unique(stain$trait)[1]))
+
+stain_hib <- unique(stain$commercial_name)
+```
+
+### survival
+
+```{r}
+pacman::p_load(survival, ggsurvfit, survminer)
+
+surv.stain <- survfit2(Surv(prom_obs_num_value, censoring)~commercial_name, data=stain)  
+stain$commercial_name |> unique()
+
+surv.stain %>% 
+  ggsurvfit(group=1) +
+  add_confidence_interval() +
+  facet_wrap(~strata) +
+  theme(legend.position = "none") +
+  scale_x_continuous(n.breaks = 6) +
+  geom_vline(xintercept = 6,linetype="dashed") + 
+  labs(x="%", y="Probability")+
+  ggtitle(paste("Trait:", unique(stain$trait)[1]))
+```
+
+
+```{r}
+surv_summary <- summary(surv.stain, time = c(5))
+
+surv_data <- data.frame(
+  commercial_name = surv_summary$strata,
+  survival_probability = surv_summary$surv,
+  lower = surv_summary$lower,
+  upper = surv_summary$upper,
+  std_error = surv_summary$std.err,
+  time = rep(5, length(surv_summary$surv))  # Add the time point
+) |> 
+  mutate(commercial_name = gsub("commercial_name=", "", commercial_name)) |> 
+  mutate_at(vars(survival_probability, lower, upper, std_error), ~ . * 100)
+
+pairwise_results <- pairwise_survdiff(Surv(prom_obs_num_value, censoring) ~ commercial_name, data = stain)
+p_values_matrix <- as.matrix(pairwise_results$p.value)
+
+p_values_df <- as.data.frame(as.table(p_values_matrix)) %>%
+  rename(Comparison = Var1, Comparison2 = Var2, p_value = Freq) %>%  # Rename columns
+  mutate(difiere_KODIAK = ifelse(p_value < 0.05, "SI", "NO")) %>%  # Create categorical column
+  filter(Comparison == "KODIAK" | Comparison2 == "KODIAK") %>%  # Filter for KODIAK
+  drop_na(p_value) |>   # Drop NA values in p_value
+  mutate(commercial_name = if_else(Comparison == "KODIAK", Comparison2, Comparison))  # Create Fusion column
+p_values_df
+
+surv_data %>% 
+  left_join(p_values_df, by="commercial_name") |>
+  filter(commercial_name %in% hibs_m2_set2$commercial_name) |> 
+  ggplot() + 
+  geom_pointrange(aes(
+    x=fct_reorder(commercial_name, survival_probability, mean), 
+    y=round(survival_probability), 
+    ymin=lower, ymax=upper, 
+    color=difiere_KODIAK), 
+    size=2, fill="white", shape=22) + 
+  scale_colour_discrete(na.translate = F)+
+  geom_text(aes(
+    x=fct_reorder(commercial_name, survival_probability, mean),
+    y=round(survival_probability),
+    label=round(survival_probability)), hjust=.5) +
+  coord_flip() +
+  labs(x="", y="%", title="Probabilidad de alcanzar 5% de manchado") +
+  geom_hline(data=surv_data |> filter(commercial_name=="KODIAK"),
+             aes(yintercept  = round(survival_probability)), 
+             linetype = "dashed", color = "red")  +
+  cowplot::theme_minimal_hgrid() + 
+  theme(legend.position = "bottom")
+
+  # Add vertical line at time = 5
+
+knitr::kable(surv_data)
+```
+
+### 2
+
+```{r}
+traits_ME2  
+
+stain %>% 
+  group_by(year_loc) |> 
+  filter('KODIAK' %in% commercial_name) %>%
+  mutate(ref = prom_obs_num_value[commercial_name=="KODIAK"]) %>%
+  # calcular within-field: n de hibs, FIELD_press (95°) y variabilidad
+  group_by(year_loc) %>%
+  reframe(ref=first(ref), 
+          n_hibs=n(), 
+          field_press = quantile(prom_obs_num_value,.95),
+          IQR = IQR(prom_obs_num_value)
+          )%>% 
+  mutate(keep = (n_hibs>1) & (ref>4) & (IQR>.1)) %>%
+  ungroup-> press_stain
+
+press_stain %>% knitr::kable()
+press_stain %>% count(keep)
+```
+
+```{r}
+press_stain %>% 
+  filter(keep==TRUE) %>% 
+  select(year_loc, ref) %>% 
+  left_join(stain, by="year_loc") %>% 
+  group_by(year_loc) %>% 
+  mutate(CE = (1-(prom_obs_num_value/ref))*100) %>%   
+  ungroup -> clean_stain_pre 
+    # OBS_numValue2=OBS_numValue+1, 
+    # ref2 = OBS_numValue2[commercialName=="DK7088VT3P"],
+    # SI = OBS_numValue2/ref2) %>%
+
+# retener hibridos presentes en al menos 5 fields
+clean_stain_pre %>% 
+  count(commercial_name) %>%
+  filter(n>1) -> stain_n
+
+clean_stain <- clean_stain_pre %>% 
+  filter(commercial_name %in% stain_n$commercial_name)
+
+clean_stain %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> stain_set
+
+stain_set %>% knitr::kable()
+
+press_stain %>% 
+  left_join(stain) %>% 
+  drop_na(prom_obs_num_value) %>% 
+  ggplot() +
+  facet_grid(keep~., scales="free", space = "free") +
+  aes(x=prom_obs_num_value, y=fct_reorder(year_loc, prom_obs_num_value, mean), fill=keep, col=keep) +
+  geom_boxplot(alpha=.2) + 
+  geom_count() +
+  labs(x="OBS_numvalue", y="") +
+  ggtitle(paste("Trait:", unique(stain$trait)[1]))+ 
+  theme(legend.position='bottom')
+```
+
+```{r}
+# pal <- colorNumeric("viridis", domain=c(1,max(unique(press_stain$field_press))))
+pal <- colorNumeric(palette = c("green", "red"), domain = press_stain$field_press)
+
+press_stain %>% 
+  left_join(m2_raw_geo) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addProviderTiles(providers$Stadia.AlidadeSmooth) |> 
+  addCircleMarkers(
+    color = ~pal(field_press),
+    radius=3, 
+    popup = paste0( "FIELD:"
+                    , press_stain$year_loc 
+                    , "<br>"
+                    , "Press:"
+                    , press_stain$field_press
+    )) %>% 
+  addLegend(data = press_stain,
+            position = "bottomright",
+            pal = pal, values = ~field_press,
+            title = "stain %",
+            opacity = 1)
+```
+
+```{r}
+clean_stain %>%  
+  # distinct(commercialName) %>% arrange(commercialName) %>% data.frame
+  ggplot() + 
+  # facet_wrap("FIELD_plantingSeason")+
+  aes(y=commercial_name, x=CE) + 
+  geom_point(alpha=.5, aes(col=year_loc))  + 
+  # geom_jitter(width=.1, alpha=.5, aes(col=year_loc))  + 
+  stat_summary() + 
+  labs(y="", 
+       title="Within field Control Efficacy %", 
+       subtitle = "CE = (1-(hyb_score/ref.susc_score))*100)") + 
+  guides(col="none")
+```
+
+### 3
+
+```{r}
+clean_stain %>% 
+  group_by(commercial_name, year_loc) %>% 
+  summarise(prom_obs_num_value=mean(prom_obs_num_value)) %>% 
+  select(commercial_name, year_loc, prom_obs_num_value) %>% 
+  pivot_wider(names_from = "year_loc", values_from = "prom_obs_num_value") %>% 
+  mutate(Average_geno = mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-(commercial_name), names_to = "year_loc", values_to = "prom_obs_num_value") %>% 
+  pivot_wider(names_from = "commercial_name", values_from = "prom_obs_num_value") %>% 
+  rowwise() %>% 
+  mutate(Average_field= mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-year_loc, names_to = "commercial_name", 
+               values_to = "prom_obs_num_value") %>% 
+  mutate(commercial_name = fct_reorder(commercial_name, prom_obs_num_value, mean)) %>% 
+  mutate(commercial_name = fct_relevel(commercial_name, "Average_field", after = Inf)) %>% 
+  mutate(year_loc = fct_reorder(year_loc, prom_obs_num_value, mean)) %>% 
+  mutate(year_loc = fct_relevel(year_loc, "Average_geno", 
+                                after = Inf)) -> stain_mos
+```
+
+```{r}
+stain_mos %>% 
+  ggplot(aes(x = commercial_name, y = year_loc)) + 
+  geom_tile(colour="black", aes(fill = prom_obs_num_value)) +
+  scale_fill_viridis_c() +
+  geom_text(aes(label=round(prom_obs_num_value)), color="white", size=3, fontface="bold") +
+  theme(axis.text.y = element_text(size = 8)) +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5, size = 12)) +
+  labs(x="", y="", fill="DINP %")  +
+  ggtitle(paste("Trait:", unique(stain$trait)[1]))
+
+# last_plot() %>% ggsave(file="plots/m3_yc_mosaico_tarspot.tiff", scale = 1.2, w=6)
+```
+
+### 4
+
+```{r}
+clean_stain|>
+  ggplot() + 
+  aes(commercial_name, CE) + 
+  geom_boxplot() + 
+  geom_jitter(width=.2)
+
+m_stain <- glmer(CE ~ commercial_name + (1|year_loc), data=clean_stain)
+performance::check_heteroscedasticity(m_stain)
+performance::check_normality(m_stain)
+
+stain_res <- emmeans(m_stain, ~commercial_name, type = "response") %>%
+  cld(decreasing = TRUE, Letters = letters)%>%
+  tibble() |> 
+  mutate(.group = str_squish(.group)) |> 
+  # left_join(hib_m2) %>% 
+  left_join(stain_n) |> 
+  left_join(stain_set|>select(-n))
+stain_res
+```
+
+### 5
+
+```{r}
+stain_res %>% 
+  filter(commercial_name %in% hibs_m2_set2$commercial_name) |> 
+  ggplot()+ 
+  aes(
+    x=fct_reorder(commercial_name, emmean, mean),
+    y=emmean) +
+  geom_col(aes(fill=.group),width=.1) + 
+  # geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL))+
+  geom_text(aes(label=paste(round(emmean))), size=3, vjust=-1)+
+  # geom_text(aes(label=paste(round(mean_val)), y=-Inf), 
+  #           size=3, vjust=1)+
+  labs(y="Control efficacy (relative to 'KODIAK' = 0)", 
+       x="", fill="Tukey (5%)", 
+       subtitle="ME2 - Base MD ", 
+       caption="Cuanto mayor el valor en x, mejor performance\n datapoints) al lado del hibrido") + 
+  ggtitle(paste("Trait:", unique(stain$trait)[1]))+
+  geom_text(aes(label=paste0("n=", n," - mean=", round(mean_val)), y=-Inf), hjust=-.2, size=3) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        legend.position="bottom") + 
+  coord_flip()+ 
+  expand_limits(y = -30)
+  
+```
+
+## "DSR - PATHOGEN:Cercospora zeae-maydis, TISTY:Leaf"
+
+```{r}
+m2_full %>% 
+  filter(str_detect(trait,"DSR - PATHOGEN:Cercospora zeae-maydis, TISTY:Leaf")) %>%
+  drop_na(prom_obs_num_value) |> 
+  group_by(field_year, year_loc, commercial_name, trait) |> 
+  summarise(prom_obs_num_value = max(prom_obs_num_value),.groups = "drop") -> gls
+
+```
+
+### 2
+
+```{r}
+traits_ME2  
+
+gls %>% 
+  group_by(year_loc) |> 
+  filter('DK4024' %in% commercial_name) %>%
+  mutate(ref = prom_obs_num_value[commercial_name=="DK4024"]) %>%
+  # calcular within-field: n de hibs, FIELD_press (95°) y variabilidad
+  group_by(year_loc) %>%
+  reframe(ref=first(ref), 
+          n_hibs=n(), 
+          field_press = quantile(prom_obs_num_value,.95),
+          IQR = IQR(prom_obs_num_value)
+          )%>% 
+  mutate(keep = (n_hibs>1) & (ref>1) & (IQR>.1)) %>%
+  ungroup-> press_gls
+
+press_gls %>% knitr::kable()
+press_gls %>% count(keep)
+```
+
+```{r}
+press_gls %>% 
+  filter(keep==TRUE) %>% 
+  select(year_loc, ref) %>% 
+  left_join(gls, by="year_loc") %>% 
+  group_by(year_loc) %>% 
+  mutate(CE = (1-(prom_obs_num_value/ref))*100) %>%   
+  ungroup -> clean_gls_pre 
+    # OBS_numValue2=OBS_numValue+1, 
+    # ref2 = OBS_numValue2[commercialName=="DK7088VT3P"],
+    # SI = OBS_numValue2/ref2) %>%
+
+# retener hibridos presentes en al menos 5 fields
+clean_gls_pre %>% 
+  count(commercial_name) %>%
+  filter(n>1) -> gls_n
+
+clean_gls <- clean_gls_pre %>% 
+  filter(commercial_name %in% gls_n$commercial_name)
+
+clean_gls %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> gls_set
+
+gls_set %>% knitr::kable()
+
+press_gls %>% 
+  left_join(gls) %>% 
+  drop_na(prom_obs_num_value) %>% 
+  ggplot() +
+  facet_grid(keep~., scales="free", space = "free") +
+  aes(x=prom_obs_num_value, y=fct_reorder(year_loc, prom_obs_num_value, mean), fill=keep, col=keep) +
+  geom_boxplot(alpha=.2) + 
+  geom_count() +
+  labs(x="OBS_numvalue", y="") +
+  ggtitle(paste("Trait:", unique(gls$trait)[1]))+ 
+  theme(legend.position='bottom')
+```
+
+```{r}
+# pal <- colorNumeric("viridis", domain=c(1,max(unique(press_gls$field_press))))
+pal <- colorNumeric(palette = c("green", "red"), domain = press_gls$field_press)
+
+press_gls %>% 
+  left_join(m2_raw_geo) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addProviderTiles(providers$Stadia.AlidadeSmooth) |> 
+  addCircleMarkers(
+    color = ~pal(field_press),
+    radius=3, 
+    popup = paste0( "FIELD:"
+                    , press_gls$year_loc 
+                    , "<br>"
+                    , "Press:"
+                    , press_gls$field_press
+    )) %>% 
+  addLegend(data = press_gls,
+            position = "bottomright",
+            pal = pal, values = ~field_press,
+            title = "gls %",
+            opacity = 1)
+```
+
+```{r}
+clean_gls %>%  
+  # distinct(commercialName) %>% arrange(commercialName) %>% data.frame
+  ggplot() + 
+  # facet_wrap("FIELD_plantingSeason")+
+  aes(y=commercial_name, x=CE) + 
+  geom_point(alpha=.5, aes(col=year_loc))  + 
+  # geom_jitter(width=.1, alpha=.5, aes(col=year_loc))  + 
+  stat_summary() + 
+  labs(y="", 
+       title="Within field Control Efficacy %", 
+       subtitle = "CE = (1-(hyb_score/ref.susc_score))*100)") + 
+  guides(col="none")
+```
+
+### 3
+
+```{r}
+clean_gls %>% 
+  group_by(commercial_name, year_loc) %>% 
+  summarise(prom_obs_num_value=mean(prom_obs_num_value)) %>% 
+  select(commercial_name, year_loc, prom_obs_num_value) %>% 
+  pivot_wider(names_from = "year_loc", values_from = "prom_obs_num_value") %>% 
+  mutate(Average_geno = mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-(commercial_name), names_to = "year_loc", values_to = "prom_obs_num_value") %>% 
+  pivot_wider(names_from = "commercial_name", values_from = "prom_obs_num_value") %>% 
+  rowwise() %>% 
+  mutate(Average_field= mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-year_loc, names_to = "commercial_name", 
+               values_to = "prom_obs_num_value") %>% 
+  mutate(commercial_name = fct_reorder(commercial_name, prom_obs_num_value, mean)) %>% 
+  mutate(commercial_name = fct_relevel(commercial_name, "Average_field", after = Inf)) %>% 
+  mutate(year_loc = fct_reorder(year_loc, prom_obs_num_value, mean)) %>% 
+  mutate(year_loc = fct_relevel(year_loc, "Average_geno", 
+                                after = Inf)) -> gls_mos
+```
+
+```{r}
+gls_mos %>% 
+  ggplot(aes(x = commercial_name, y = year_loc)) + 
+  geom_tile(colour="black", aes(fill = prom_obs_num_value)) +
+  scale_fill_viridis_c() +
+  geom_text(aes(label=round(prom_obs_num_value)), color="white", size=3, fontface="bold") +
+  theme(axis.text.y = element_text(size = 8)) +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5, size = 12)) +
+  labs(x="", y="", fill="DINP %")  +
+  ggtitle(paste("Trait:", unique(gls$trait)[1]))
+
+# last_plot() %>% ggsave(file="plots/m3_yc_mosaico_tarspot.tiff", scale = 1.2, w=6)
+```
+
+### 4
+
+```{r}
+clean_gls|>
+  ggplot() + 
+  aes(commercial_name, CE) + 
+  geom_boxplot() + 
+  geom_jitter(width=.2)
+
+m_gls <- glmer(CE ~ commercial_name + (1|year_loc), data=clean_gls)
+performance::check_heteroscedasticity(m_gls)
+performance::check_normality(m_gls)
+
+gls_res <- emmeans(m_gls, ~commercial_name, type = "response") %>%
+  cld(decreasing = TRUE, Letters = letters)%>%
+  tibble() |> 
+  mutate(.group = str_squish(.group)) |> 
+  # left_join(hib_m2) %>% 
+  left_join(gls_n) |> 
+  left_join(gls_set|>select(-n))
+gls_res
+```
+
+### 5
+
+```{r}
+gls_res %>% 
+  filter(commercial_name %in% hibs_m2_set2$commercial_name) |> 
+  ggplot()+ 
+  aes(
+    x=fct_reorder(commercial_name, emmean, mean),
+    y=emmean) +
+  geom_col(aes(fill=.group),width=.1) + 
+  # geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL))+
+  geom_text(aes(label=paste(round(emmean))), size=3, vjust=-1)+
+  # geom_text(aes(label=paste(round(mean_val)), y=-Inf), 
+  #           size=3, vjust=1)+
+  labs(y="Control efficacy (relative to 'KODIAK' = 0)", 
+       x="", fill="Tukey (5%)", 
+       subtitle="ME2 - Base MD ", 
+       caption="Cuanto mayor el valor en x, mejor performance\n datapoints) al lado del hibrido") + 
+  ggtitle(paste("Trait:", unique(gls$trait)[1]))+
+  geom_text(aes(label=paste0("n=", n," - mean=", round(mean_val)), y=-Inf), hjust=-.2, size=3) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        legend.position="bottom") + 
+  coord_flip()+ 
+  expand_limits(y = -45)
+  
+```
+
+## "DINP - PATHOGEN:Spiroplasma kunkelii, TISTY:Leaf"
+
+```{r}
+m2_full %>% 
+  filter(str_detect(trait,"DINP - PATHOGEN:Spiroplasma kunkelii, TISTY:Leaf")) %>%
+  group_by(field_year, year_loc, brand, commercial_name, trait) |> 
+  summarise(prom_obs_num_value = max(prom_obs_num_value),.groups = "drop") |> 
+  drop_na(prom_obs_num_value) |> 
+  drop_na(field_year)-> spiro
+
+spiro |> 
+  count(brand, brand)
+
+spiro |> count(field_year, brand, commercial_name)
+spiro %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> spiro_set
+
+spiro_set %>% knitr::kable()
+```
+
+### 2
+
+```{r}
+traits_ME2
+
+spiro %>% 
+  group_by(year_loc) |> 
+  filter('KODIAK' %in% commercial_name) %>%
+  mutate(ref = prom_obs_num_value[commercial_name=="KODIAK"]) %>%
+  # calcular within-field: n de hibs, FIELD_press (95°) y variabilidad
+  group_by(year_loc) %>%
+  reframe(ref=first(ref), 
+          n_hibs=n(), 
+          field_press = quantile(prom_obs_num_value,.95),
+          IQR = IQR(prom_obs_num_value)
+          )%>% 
+  mutate(keep = (n_hibs>1) & (ref>1) & (IQR>.1)) %>%
+  ungroup-> press_spiro
+
+press_spiro %>% knitr::kable()
+press_spiro %>% count(keep)
+```
+
+
+```{r}
+# pal <- colorNumeric("viridis", domain=c(1,max(unique(press_spiro$field_press))))
+pal <- colorNumeric(palette = c("green", "red"), domain = press_spiro$field_press)
+
+press_spiro %>% 
+  left_join(m2_raw_geo) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addProviderTiles(providers$Stadia.AlidadeSmooth) |> 
+  addCircleMarkers(
+    color = ~pal(field_press),
+    radius=3, 
+    popup = paste0( "FIELD:"
+                    , press_spiro$year_loc 
+                    , "<br>"
+                    , "Press:"
+                    , press_spiro$field_press
+    )) %>% 
+  addLegend(data = press_spiro,
+            position = "bottomright",
+            pal = pal, values = ~field_press,
+            title = "spiro %",
+            opacity = 1)
+```
+
+```{r}
+press_spiro %>% 
+  filter(keep==TRUE) %>% 
+  select(year_loc, ref) %>% 
+  left_join(spiro, by="year_loc") %>% 
+  group_by(year_loc) %>% 
+  mutate(CE = (1-(prom_obs_num_value/ref))*100) %>%   
+  ungroup -> clean_spiro_pre 
+    # OBS_numValue2=OBS_numValue+1, 
+    # ref2 = OBS_numValue2[commercialName=="DK7088VT3P"],
+    # SI = OBS_numValue2/ref2) %>%
+
+# retener hibridos presentes en al menos 5 fields
+clean_spiro_pre %>% 
+  count(commercial_name) %>%
+  filter(n>1) -> spiro_n
+
+clean_spiro <- clean_spiro_pre %>% 
+  filter(commercial_name %in% spiro_n$commercial_name)
+
+clean_spiro %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> spiro_set
+
+spiro_set %>% knitr::kable()
+
+press_spiro %>% 
+  left_join(spiro) %>% 
+  drop_na(prom_obs_num_value) %>% 
+  ggplot() +
+  facet_grid(keep~., scales="free", space = "free") +
+  aes(x=prom_obs_num_value, y=fct_reorder(year_loc, prom_obs_num_value, mean), fill=keep, col=keep) +
+  geom_boxplot(alpha=.2) + 
+  geom_count() +
+  labs(x="OBS_numvalue", y="") +
+  ggtitle(paste("Trait:", unique(spiro$trait)[1]))+ 
+  theme(legend.position='bottom')
+```
+
+```{r}
+clean_spiro %>%  
+  # distinct(commercialName) %>% arrange(commercialName) %>% data.frame
+  ggplot() + 
+  # facet_wrap("FIELD_plantingSeason")+
+  aes(y=commercial_name, x=CE) + 
+  geom_point(alpha=.5, aes(col=year_loc))  + 
+  # geom_jitter(width=.1, alpha=.5, aes(col=year_loc))  + 
+  stat_summary() + 
+  labs(y="", 
+       title="Within field Control Efficacy %", 
+       subtitle = "CE = (1-(hyb_score/ref.susc_score))*100)") + 
+  guides(col="none")
+```
+
+### 3
+
+```{r}
+clean_spiro %>% 
+  group_by(commercial_name, year_loc) %>% 
+  summarise(prom_obs_num_value=mean(prom_obs_num_value)) %>% 
+  select(commercial_name, year_loc, prom_obs_num_value) %>% 
+  pivot_wider(names_from = "year_loc", values_from = "prom_obs_num_value") %>% 
+  mutate(Average_geno = mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-(commercial_name), names_to = "year_loc", values_to = "prom_obs_num_value") %>% 
+  pivot_wider(names_from = "commercial_name", values_from = "prom_obs_num_value") %>% 
+  rowwise() %>% 
+  mutate(Average_field= mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-year_loc, names_to = "commercial_name", 
+               values_to = "prom_obs_num_value") %>% 
+  mutate(commercial_name = fct_reorder(commercial_name, prom_obs_num_value, mean)) %>% 
+  mutate(commercial_name = fct_relevel(commercial_name, "Average_field", after = Inf)) %>% 
+  mutate(year_loc = fct_reorder(year_loc, prom_obs_num_value, mean)) %>% 
+  mutate(year_loc = fct_relevel(year_loc, "Average_geno", 
+                                after = Inf)) -> spiro_mos
+```
+
+```{r}
+spiro_mos %>% 
+  ggplot(aes(x = commercial_name, y = year_loc)) + 
+  geom_tile(colour="black", aes(fill = prom_obs_num_value)) +
+  scale_fill_viridis_c() +
+  geom_text(aes(label=round(prom_obs_num_value)), color="white", size=3, fontface="bold") +
+  theme(axis.text.y = element_text(size = 8)) +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5, size = 12)) +
+  labs(x="", y="", fill="DINP %")  +
+  ggtitle(paste("Trait:", unique(spiro$trait)[1]))
+
+# last_plot() %>% ggsave(file="plots/m3_yc_mosaico_tarspot.tiff", scale = 1.2, w=6)
+```
+
+### 4
+
+```{r}
+clean_spiro|>
+  ggplot() + 
+  aes(commercial_name, CE) + 
+  geom_boxplot() + 
+  geom_jitter(width=.2)
+
+m_spiro <- glmer(CE ~ commercial_name + (1|year_loc), data=clean_spiro)
+performance::check_heteroscedasticity(m_spiro)
+performance::check_normality(m_spiro)
+
+spiro_res <- emmeans(m_spiro, ~commercial_name, type = "response") %>%
+  cld(decreasing = TRUE, Letters = letters)%>%
+  tibble() |> 
+  mutate(.group = str_squish(.group)) |> 
+  # left_join(hib_m2) %>% 
+  left_join(spiro_n) |> 
+  left_join(spiro_set|>select(-n))
+spiro_res
+```
+
+### 5
+
+```{r}
+spiro_res %>% 
+  filter(commercial_name %in% hibs_m2_set2$commercial_name) |> 
+  ggplot()+ 
+  aes(
+    x=fct_reorder(commercial_name, emmean, mean),
+    y=emmean) +
+  geom_col(aes(fill=.group),width=.1) + 
+  # geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL))+
+  geom_text(aes(label=paste(round(emmean))), size=3, vjust=-1)+
+  # geom_text(aes(label=paste(round(mean_val)), y=-Inf), 
+  #           size=3, vjust=1)+
+  labs(y="Control efficacy (relative to 'KODIAK' = 0)", 
+       x="", fill="Tukey (5%)", 
+       subtitle="ME2 - Base MD ", 
+       caption="Cuanto mayor el valor en x, mejor performance\n datapoints) al lado del hibrido") + 
+  ggtitle(paste("Trait:", unique(spiro$trait)[1]))+
+  geom_text(aes(label=paste0("n=", n," - mean=", round(mean_val)), y=-Inf), hjust=-.2, size=3) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        legend.position="bottom") + 
+  coord_flip()+ 
+  expand_limits(y = -45)
+  
+```
+
+## "DINP - PATHOGEN:Fusarium sp., TISTY:Stalk"
+
+```{r}
+m2_raw |> 
+  filter(str_detect(trait,"DINEP - PATHOGEN:Fusarium graminearum, TISTY:Stalk|")) %>%
+  filter(commercial_name %in% hibs_m2$commercial_name) |> 
+  count(field_year, commercial_name) |>
+  pivot_wider(names_from = field_year, values_from = n) |>
+  data.frame() 
+
+m2_raw |> 
+  filter(str_detect(trait,"DINEP - PATHOGEN:Fusarium graminearum, TISTY:Stalk|DINP - PATHOGEN:Fusarium sp., TISTY:Stalk")) %>%
+  filter(!str_detect(trait,"SCTYPE:Early")) %>%
+  filter(!str_detect(year_loc,"2020_FH")) %>%
+  filter(commercial_name %in% hibs_m2$commercial_name) |> 
+  drop_na(prom_obs_num_value) |> 
+  # count(brand, commercial_name)
+  group_by(field_year, year_loc, brand, commercial_name, trait) |> 
+  summarise(prom_obs_num_value = max(prom_obs_num_value),.groups = "drop") -> stalk_fus
+
+stalk_fus |> filter(year_loc=="2020_FH52" )  
+stalk_fus |> count(year_loc,sort = TRUE)  |> data.frame()
+stalk_fus |> count(brand, commercial_name)
+```
+
+### 2
+
+```{r}
+traits_ME2  
+
+# TARSPOT_ref_mean <- TARSPOT_set[TARSPOT_set$commercialName=="DK7088VT3P","mean_val"] %>% pull
+
+stalk_fus %>% 
+  group_by(year_loc) |> 
+  filter('ANTILOPE' %in% commercial_name) %>%
+  mutate(ref = prom_obs_num_value[commercial_name=="ANTILOPE"]) %>%
+  # calcular within-field: n de hibs, FIELD_press (95°) y variabilidad
+  group_by(year_loc) %>%
+  reframe(ref=first(ref), 
+          n_hibs=n(), 
+          field_press = quantile(prom_obs_num_value,.95),
+          IQR = IQR(prom_obs_num_value)
+          )%>% 
+  mutate(keep = (n_hibs>1) & (ref>5) & (IQR>.1)) %>%
+  ungroup-> press_stalk_fus
+
+press_stalk_fus %>% knitr::kable()
+
+press_stalk_fus %>% count(keep)
+```
+
+```{r}
+press_stalk_fus %>% 
+  filter(keep==TRUE) %>% 
+  select(year_loc, ref) %>% 
+  left_join(stalk_fus, by="year_loc") %>% 
+  group_by(year_loc) %>% 
+  mutate(CE = (1-(prom_obs_num_value/ref))*100) %>%   
+  ungroup -> clean_stalk_fus_pre 
+    # OBS_numValue2=OBS_numValue+1, 
+    # ref2 = OBS_numValue2[commercialName=="DK7088VT3P"],
+    # SI = OBS_numValue2/ref2) %>%
+
+# retener hibridos presentes en al menos 5 fields
+clean_stalk_fus_pre %>% 
+  count(commercial_name) %>%
+  filter(n>1) -> stalk_fus_n
+
+clean_stalk_fus <- clean_stalk_fus_pre %>% 
+  filter(commercial_name %in% stalk_fus_n$commercial_name)
+
+clean_stalk_fus %>% 
+  group_by(commercial_name) %>% 
+  summarise(n=n(), 
+            mean_val = mean(prom_obs_num_value)) %>% 
+  arrange(-mean_val) -> stalk_fus_set
+
+stalk_fus_set %>% knitr::kable()
+```
+
+```{r}
+press_stalk_fus %>% 
+  left_join(stalk_fus) %>% 
+  drop_na(prom_obs_num_value) %>% 
+  ggplot() +
+  facet_grid(keep~., scales="free", space = "free") +
+  aes(x=prom_obs_num_value, y=fct_reorder(year_loc, prom_obs_num_value, mean), fill=keep, col=keep) +
+  geom_boxplot(alpha=.2) + 
+  geom_count() +
+  labs(x="LDSR_TARSPOT", y="", title="Región Templada: pasan al análisis los FIELDS en Azul") +
+  theme(legend.position='bottom')
+```
+
+```{r}
+pal <- colorNumeric("viridis", domain=c(1,max(unique(press_stalk_fus$field_press))))
+
+press_stalk_fus %>% 
+  left_join(m2_raw_geo) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(
+    color = ~pal(field_press),
+    radius=3, 
+    popup = paste0( "FIELD:"
+                    , press_stalk_fus$year_loc 
+                    , "<br>"
+                    , "Press:"
+                    , press_stalk_fus$field_press
+    )) %>% 
+  addLegend(data = press_stalk_fus,
+            position = "bottomright",
+            pal = pal, values = ~field_press,
+            title = "stalk_fus Score",
+            opacity = 1)
+```
+
+```{r}
+clean_stalk_fus %>%  
+  # distinct(commercialName) %>% arrange(commercialName) %>% data.frame
+  ggplot() + 
+  # facet_wrap("FIELD_plantingSeason")+
+  aes(y=commercial_name, x=CE) + 
+  geom_point(alpha=.5, aes(col=year_loc))  + 
+  # geom_jitter(width=.1, alpha=.5, aes(col=year_loc))  + 
+  stat_summary() + 
+  labs(y="", 
+       title="Within field Control Efficacy %", 
+       subtitle = "CE = (1-(hyb_score/ref.susc_score))*100)") + 
+  guides(col="none")
+```
+
+### 3
+
+```{r}
+clean_stalk_fus %>% 
+  group_by(commercial_name, year_loc) %>% 
+  summarise(prom_obs_num_value=mean(prom_obs_num_value)) %>% 
+  select(commercial_name, year_loc, prom_obs_num_value) %>% 
+  pivot_wider(names_from = "year_loc", values_from = "prom_obs_num_value") %>% 
+  mutate(Average_geno = mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-(commercial_name), names_to = "year_loc", values_to = "prom_obs_num_value") %>% 
+  pivot_wider(names_from = "commercial_name", values_from = "prom_obs_num_value") %>% 
+  rowwise() %>% 
+  mutate(Average_field= mean(c_across(where(is.numeric)), na.rm = TRUE)) %>% 
+  pivot_longer(-year_loc, names_to = "commercial_name", 
+               values_to = "prom_obs_num_value") %>% 
+  mutate(commercial_name = fct_reorder(commercial_name, prom_obs_num_value, mean)) %>% 
+  mutate(commercial_name = fct_relevel(commercial_name, "Average_field", after = Inf)) %>% 
+  mutate(year_loc = fct_reorder(year_loc, prom_obs_num_value, mean)) %>% 
+  mutate(year_loc = fct_relevel(year_loc, "Average_geno", 
+                                after = Inf)) -> stalkfus_mos
+```
+
+```{r}
+stalkfus_mos %>% 
+  ggplot(aes(x = commercial_name, y = year_loc)) + 
+  geom_tile(colour="black", aes(fill = prom_obs_num_value)) +
+  scale_fill_viridis_c() +
+  geom_text(aes(label=round(prom_obs_num_value)), color="white", size=2, fontface="bold") +
+  theme(axis.text.y = element_text(size = 8)) +
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=.5, size = 12)) +
+  labs(x="", y="", fill="DINP %", title = "ME2 FUS_STALK - Base MD")  
+# last_plot() %>% ggsave(file="plots/m3_yc_mosaico_tarspot.tiff", scale = 1.2, w=6)
+```
+
+### 4
+
+```{r}
+clean_stalk_fus|>
+  ggplot() + 
+  aes(commercial_name, CE) + 
+  geom_boxplot() + 
+  geom_jitter(width=.2)
+
+
+m_stalk_fus <- lmer(CE ~ commercial_name + (1|year_loc), data=clean_stalk_fus)
+performance::check_heteroscedasticity(m_stalk_fus)
+performance::check_normality(m_stalk_fus)
+
+stalk_fus_res <- emmeans(m_stalk_fus, ~commercial_name, type = "response") %>%
+  cld(decreasing = TRUE, Letters = letters)%>%
+  tibble() |> 
+  mutate(.group = str_squish(.group)) |> 
+  # left_join(hib_m2) %>% 
+  left_join(stalk_fus_n) |> 
+  left_join(stalk_fus_set|>select(-n))
+stalk_fus_res
+```
+
+### 5
+
+```{r}
+stalk_fus_res %>% 
+  filter(commercial_name %in% hibs_m2_set1$commercial_name) |> 
+  ggplot()+ 
+  aes(
+    x=fct_reorder(commercial_name, emmean, mean),
+    y=emmean) +
+  geom_col(aes(fill=.group),width=.1) + 
+  # geom_pointrange(aes(ymin = lower.CL, ymax = upper.CL))+
+  geom_text(aes(label=paste(round(emmean))), size=3, vjust=-1)+
+  # geom_text(aes(label=paste(round(mean_val)), y=-Inf), 
+  #           size=3, vjust=1)+
+  labs(y="Control efficacy (relative to 'ANTILOPE' = 0)", 
+       x="", fill="Tukey (5%)")+ 
+  ggtitle(paste("Trait:", unique(stalk_fus$trait)[1]))+
+  geom_text(aes(label=paste0("n=", n," - mean=", round(mean_val)), y=-Inf), hjust=-.2, size=3) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 14),
+        legend.position="bottom") + 
+  coord_flip()+ 
+  expand_limits(y = -15)
+```
+
+## Final tab
+
+```{r eval=FALSE}
+me2_res_bio <- bind_rows(
+  list(
+    # "Tarspot"=TARSC_res %>% data.frame, 
+    # "Northern LB"=SETOTU_res%>% data.frame,
+    "Stained grain"=stain_res%>% data.frame,
+    "Gray Leaf Spot"=gls_res%>% data.frame,
+    "Corn stunt"  =spiro_res %>% data.frame,
+    "Stalk rot - Fusarium"=stalk_fus_res%>% data.frame),
+  .id = "trait") %>% 
+  select(trait, commercial_name, n,  ctrl_efficacy=emmean)
+
+
+me2_res_bio %>%
+  group_by(trait) %>% 
+  mutate(performance = dense_rank(ctrl_efficacy)) %>% 
+  select(trait, commercial_name, media=ctrl_efficacy, performance)  %>% 
+  mutate(trait = fct_rev(factor(trait)))%>% 
+  ggplot(aes(y= fct_rev(trait), x = commercial_name )) + 
+  geom_tile(colour="black", aes(fill = performance)) +
+  geom_text(aes(label=performance), color="white", size=3, fontface="bold") +
+  # geom_text(aes(label=letra_tukey), color="white", size=3, vjust=2.2, fontface="bold") +
+  scale_fill_viridis_c(begin = .9,  end= 0, guide = guide_legend(reverse = FALSE), 
+                       breaks=c(1,7,10)) +
+  scale_x_discrete(position = "top", expand = c(0,0)) +
+  theme_bw(base_size = 16) +
+  theme(axis.text.x = element_text(angle=30, hjust=0,vjust=0))  +
+  labs(
+    # title="ME3 - Yellow Conventional", 
+    #    subtitle= "Summary results", 
+       x="", fill="performance/trait", y="") 
+```
